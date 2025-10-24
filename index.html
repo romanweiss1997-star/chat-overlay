@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Twitch Chat Overlay – AlphaGodTV</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+<!-- FIXED: UNPKG → JSDELIVR -->
+<script src="https://cdn.jsdelivr.net/npm/tmi.js@1.8.5/dist/tmi.min.js"></script>
+
+<style>
+  :root{
+    --font: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    --text: #fff; --fallback-name:#4da6ff;
+    --gap:8px; --fontSize:18px; --emoteSize:24px;
+    --baseVisibleMs:25000; --fadeDurMs:1100; --maxMsgs:12;
+    --badgeSize:18px; --badgeGap:4px;
+  }
+  html,body{margin:0;padding:0;background:transparent;overflow:hidden;font-family:var(--font)}
+  #chat{display:flex;flex-direction:column-reverse;gap:var(--gap);padding:10px 14px}
+  .msg{display:inline-flex;align-items:center;gap:6px;color:var(--text);font-size:var(--fontSize);font-weight:500;line-height:1.25;word-break:break-word;opacity:0;transform:translateY(6px);text-shadow:0 0 6px rgba(0,0,0,.55);animation:fadeIn .4s ease forwards}
+  .name{font-weight:600}
+  .badges{display:inline-flex;align-items:center;gap:var(--badgeGap);margin-right:6px}
+  .badge{height:var(--badgeSize)}
+  .emote{height:var(--emoteSize);vertical-align:-4px}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+  <div id="chat"></div>
+<script>
+  const CHANNEL = 'alphagodtv';                 // ✅ richtige Kanal-ID
+  const MAX_MSGS = 12;
+  const BASE_VISIBLE_MS = 25000;                // 25s
+  const FADE_DUR_MS = 1100;
+  const FALLBACK_NAME_COLOR = '#4da6ff';
+  const ACTIVITY_WINDOW_MS = 30000;
+  const LOW_ACTIVITY_THRESHOLD = 4;
+  const VERY_LOW_ACTIVITY_THRESHOLD = 2;
+  const EXTEND_LOW_MS = 10000;
+  const EXTEND_VERY_LOW_MS = 20000;
+  const activityTimes = [];
+  let sevenTVMap=new Map(), bttvMapGlobal=new Map(), bttvMapChannel=new Map(), badgeImages={}, channelId=null;
+  const chat = document.getElementById('chat');
+
+  function escapeHtml(s){return String(s).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]) )}
+  function injectTwitchEmotes(text, emotes){
+    if(!emotes) return escapeHtml(text);
+    const parts=[], idx=[];
+    for(const id in emotes){ emotes[id].forEach(r=>{const [s,e]=r.split('-').map(Number); idx.push({s,e,id}) })}
+    idx.sort((a,b)=>a.s-b.s); let last=0;
+    idx.forEach(({s,e,id})=>{
+      if(s>last) parts.push(escapeHtml(text.slice(last,s)));
+      parts.push(`<img class="emote" src="https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0" alt="emote">`);
+      last=e+1;
+    });
+    if(last<text.length) parts.push(escapeHtml(text.slice(last)));
+    return parts.join('');
+  }
+
+  function replaceThirdPartyEmotes(text){
+    const tokens=text.split(/(\s+)/);
+    return tokens.map(tok=>{
+      const code=tok.trim(); if(!code) return tok;
+      const url=bttvMapChannel.get(code)||bttvMapGlobal.get(code)||sevenTVMap.get(code);
+      return url?tok.replace(code,`<img class="emote" src="${url}" alt="${escapeHtml(code)}">`):tok;
+    }).join('');
+  }
+
+  function renderMessageHtml(raw,twitchEmotes){
+    const withTw=injectTwitchEmotes(raw,twitchEmotes);
+    const tmp=document.createElement('div'); tmp.innerHTML=withTw;
+    (function walk(n){
+      if(n.nodeType===3){
+        const span=document.createElement('span'); span.innerHTML=replaceThirdPartyEmotes(n.textContent);
+        n.replaceWith(...span.childNodes);
+      } else if(n.nodeType===1){ [...n.childNodes].forEach(walk); }
+    })(tmp);
+    return tmp.innerHTML;
+  }
+
+  async function fetchTwitchId(u){try{
+    const r=await fetch('https://decapi.me/twitch/id/'+u); const t=await r.text();
+    if(/^\d+$/.test(t.trim())) return t.trim();
+  }catch{} return null;}
+
+  async function fetchBadges(id){try{
+    const g=await fetch('https://badges.twitch.tv/v1/badges/global/display').then(r=>r.json());
+    const c=await fetch('https://badges.twitch.tv/v1/badges/channels/'+id+'/display').then(r=>r.json());
+    badgeImages={...(g.badge_sets||{}), ...(c.badge_sets||{})};
+  }catch{}}
+
+  function renderBadges(tags){
+    const raw=tags.badges_raw||tags.badges; if(!raw) return '';
+    let entries=[]; if(typeof raw==='string') entries=raw.split(',').map(x=>x.split('/')); else entries=Object.entries(raw);
+    return entries.map(([set,ver])=>{
+      const img=badgeImages?.[set]?.versions?.[ver]?.image_url_2x||badgeImages?.[set]?.versions?.[ver]?.image_url_1x;
+      return img?`<img class="badge" src="${img}" alt="${set}">`:''}).join('');
+  }
+
+  async function load7TV(id){try{
+    const g=await fetch('https://7tv.io/v3/emote-sets/global').then(r=>r.json());
+    g?.emotes?.forEach(e=>sevenTVMap.set(e.name,`https://cdn.7tv.app/emote/${e.id}/2x.webp`));
+    if(id){const u=await fetch('https://7tv.io/v3/users/twitch/'+id).then(r=>r.json());
+      u?.emote_set?.emotes?.forEach(e=>sevenTVMap.set(e.name,`https://cdn.7tv.app/emote/${e.id}/2x.webp`));}
+  }catch{}}
+
+  async function loadBTTV(id){try{
+    const g=await fetch('https://api.betterttv.net/3/cached/emotes/global').then(r=>r.json());
+    g.forEach(e=>bttvMapGlobal.set(e.code,`https://cdn.betterttv.net/emote/${e.id}/2x.webp`));
+    if(id){const c=await fetch('https://api.betterttv.net/3/cached/users/twitch/'+id).then(r=>r.json());
+      [...c.channelEmotes||[],...c.sharedEmotes||[]].forEach(e=>bttvMapChannel.set(e.code,`https://cdn.betterttv.net/emote/${e.id}/2x.webp`));}
+  }catch{}}
+
+  const client=new tmi.Client({connection:{secure:true,reconnect:true},channels:[CHANNEL]});
+  client.connect().catch(console.error);
+
+  client.on('message',(ch,tags,text,self)=>{
+    const uname=(tags['display-name']||tags.username||'').toLowerCase();
+    if(uname===CHANNEL.toLowerCase()) return; // eigene Nachrichten ausblenden
+    add(tags,text);
+  });
+
+  function add(tags,text){
+    const now=Date.now(); activityTimes.push(now);
+    while(activityTimes.length && (now-activityTimes[0])>ACTIVITY_WINDOW_MS) activityTimes.shift();
+    let visibleMs=BASE_VISIBLE_MS;
+    if(activityTimes.length<VERY_LOW_ACTIVITY_THRESHOLD) visibleMs+=EXTEND_VERY_LOW_MS;
+    else if(activityTimes.length<LOW_ACTIVITY_THRESHOLD) visibleMs+=EXTEND_LOW_MS;
+
+    const el=document.createElement('div'); el.className='msg';
+    const nameColor=tags.color||FALLBACK_NAME_COLOR;
+    const name=escapeHtml(tags['display-name']||tags.username||'User');
+    const badges=renderBadges(tags);
+    el.innerHTML=`<span class="badges">${badges}</span><span class="name" style="color:${nameColor}">${name}:</span> <span class="txt">${renderMessageHtml(text,tags.emotes)}</span>`;
+    chat.prepend(el);
+
+    setTimeout(()=>{el.style.transition='opacity 1.1s ease-in-out'; el.style.opacity='0'; setTimeout(()=>el.remove(),FADE_DUR_MS+100)}, visibleMs);
+    while(chat.children.length>MAX_MSGS) chat.lastChild.remove();
+  }
+
+  (async function init(){
+    channelId=await fetchTwitchId(CHANNEL);
+    if(channelId) await fetchBadges(channelId);
+    await Promise.all([load7TV(channelId), loadBTTV(channelId)]);
+  })();
+</script>
+</body>
+</html>
