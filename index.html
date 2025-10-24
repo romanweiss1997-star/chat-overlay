@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self' https://cdn.jsdelivr.net https://fonts.googleapis.com https://fonts.gstatic.com; connect-src 'self' wss://irc-ws.chat.twitch.tv https://cdn.jsdelivr.net; img-src * data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' https://cdn.jsdelivr.net;">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Twitch Chat Overlay - AlphaGodTV</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/tmi.js@1.8.5/dist/tmi.min.js"></script>
+
+    <style>
+        :root {
+            --font: 'Inter', system-ui, sans-serif;
+            --text: #ffffff;
+            --fontSize: 18px;
+            --gap: 8px;
+            --maxMsgs: 14;
+            --baseVisibleMs: 25000;
+            --fadeDurMs: 1000;
+            --emoteSize: 28px;
+            --badgeSize: 18px;
+            --badgeGap: 4px;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            overflow: hidden;
+            font-family: var(--font);
+        }
+
+        #chat {
+            display: flex;
+            flex-direction: column-reverse;
+            gap: var(--gap);
+            padding: 10px 14px;
+            color: var(--text);
+            font-size: var(--fontSize);
+            line-height: 1.25;
+            font-weight: 500;
+            width: 100%;
+        }
+
+        .msg {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            opacity: 0;
+            transform: translateY(6px);
+            animation: fadeIn var(--fadeDurMs) ease-out forwards;
+            word-break: break-word;
+        }
+
+        .username {
+            font-weight: 600;
+        }
+
+        .badges img {
+            height: var(--badgeSize);
+            margin-right: var(--badgeGap);
+        }
+
+        .emote {
+            height: var(--emoteSize);
+            vertical-align: -4px;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="chat"></div>
+
+    <script>
+        const client = new tmi.Client({
+            channels: ['alphagodtv']
+        });
+
+        client.connect();
+
+        const chat = document.getElementById('chat');
+
+        client.on('message', (_, tags, message) => {
+            const msg = document.createElement('div');
+            msg.className = 'msg';
+
+            const name = document.createElement('span');
+            name.className = 'username';
+            name.textContent = tags['display-name'] + ': ';
+
+            const text = document.createElement('span');
+            text.innerHTML = message;
+
+            msg.appendChild(name);
+            msg.appendChild(text);
+            chat.prepend(msg);
+
+            setTimeout(() => msg.remove(), 25000);
+        });
+    </script>
+</body>
+</html>
